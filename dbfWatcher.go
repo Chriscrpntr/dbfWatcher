@@ -17,6 +17,19 @@ import (
 	"time"
 )
 
+// Array for easy dbfImport function usage
+type imports struct {
+	filename string
+	csvName  string
+	mp       map[int]string
+}
+
+var dbfImports = []imports{
+	{"Example.DBF",
+		"Example_CSV_Name",
+		map[int]string{0: "int", 1: "int", 71: "int"}},
+}
+
 func logError(err error) {
 	// Check for errors and log them
 	if err != nil {
@@ -176,6 +189,89 @@ func dbfImport(dir string, dbfFile string, filename string, indices map[int]stri
 	return nil
 }
 
+func watch(dir string) {
+
+	restart := make(chan bool)
+	for {
+		// Watcher to detect changes in the directory
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			logError(err)
+		}
+		defer func(watcher *fsnotify.Watcher) {
+			err := watcher.Close()
+			if err != nil {
+				logError(err)
+			}
+		}(watcher)
+
+		err = watcher.Add(dir)
+		if err != nil {
+			logError(err)
+			_ = watcher.Close()
+			return
+		}
+		go func() {
+			fmt.Println("Watcher Starting...")
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Println("Recovered from panic in watcher Goroutine:", r)
+					fmt.Println("Watcher Restarting...")
+					restart <- true
+				} else {
+					restart <- false
+				}
+				_ = watcher.Close()
+			}()
+			for {
+				select {
+				// Heartbeat to check the watcher is still running
+				case <-time.After(5 * time.Minute):
+					fmt.Println("Heartbeat: watcher is still running", time.Now().Format("15:04:05"))
+				case event, ok := <-watcher.Events:
+					if !ok {
+						logError(err)
+						fmt.Println("Watcher Restarting...")
+						restart <- true
+					}
+					fmt.Println(event)
+					// If an event is detected, run the dbfImport function
+					if event.Has(fsnotify.Write) {
+						for _, i := range dbfImports {
+							dbfFilename := filepath.Base(i.filename)
+							if filepath.Base(event.Name) == dbfFilename {
+								log.Println("modified file:", dbfFilename)
+
+								fmt.Printf("%s Updating...\n", dbfFilename)
+								err := dbfImport(dir, event.Name, dbfFilename, i.mp)
+								if err != nil {
+									logError(err)
+								}
+								// After the conversion to CSV is done run the sql to import it to Postgresql
+								sqlUpdate()
+								fmt.Printf("%s Finished!\n", dbfFilename)
+								break
+							}
+						}
+					}
+				case err, ok := <-watcher.Errors:
+					if !ok {
+						logError(err)
+						log.Println("error:", err)
+						return
+					}
+				}
+			}
+
+		}()
+		if <-restart {
+			continue
+		} else {
+			break
+		}
+	}
+}
+
 func main() {
 
 	// Panic handler
@@ -192,82 +288,9 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	// Array for easy dbfImport function usage
-	type imports struct {
-		filename string
-		csvName  string
-		mp       map[int]string
-	}
-
-	var dbfImports = []imports{
-		{"Example.DBF",
-			"Example_CSV_Name",
-			map[int]string{0: "int", 1: "int", 71: "int"}},
-	}
-
 	workingDir := os.Getenv("FOXPRO_DIR")
+	go watch(workingDir)
 
-	// Watcher to detect changes in the directory
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		logError(err)
-	}
-	defer func(watcher *fsnotify.Watcher) {
-		err := watcher.Close()
-		if err != nil {
-			logError(err)
-		}
-	}(watcher)
-
-	err = watcher.Add(workingDir)
-	if err != nil {
-		logError(err)
-	}
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Println("Recovered from panic in watcher Goroutine:", r)
-			}
-		}()
-		for {
-			select {
-			// Heartbeat to check the watcher is still running
-			case <-time.After(5 * time.Minute):
-				fmt.Println("Heartbeat: watcher is still running", time.Now().Format("15:04:05"))
-			case event, ok := <-watcher.Events:
-				if !ok {
-					logError(err)
-					return
-				}
-				fmt.Println(event)
-				// If an event is detected, run the dbfImport function
-				if event.Has(fsnotify.Write) {
-					for _, i := range dbfImports {
-						dbfFilename := filepath.Base(i.filename)
-						if filepath.Base(event.Name) == dbfFilename {
-							log.Println("modified file:", dbfFilename)
-
-							fmt.Printf("%s Updating...\n", dbfFilename)
-							err := dbfImport(workingDir, event.Name, dbfFilename, i.mp)
-							if err != nil {
-								logError(err)
-							}
-							// After the conversion to CSV is done run the sql to import it to Postgresql
-							sqlUpdate()
-							fmt.Printf("%s Finished!\n", dbfFilename)
-							break
-						}
-					}
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					logError(err)
-					log.Println("error:", err)
-					return
-				}
-			}
-		}
-	}()
 	// In case Watcher misses a change or crashes, time based update to ensure all data is up-to-date
 	go func() {
 		for {
