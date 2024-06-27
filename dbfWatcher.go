@@ -192,84 +192,90 @@ func dbfImport(dir string, dbfFile string, filename string, indices map[int]stri
 
 func watch(dir string) {
 
+	var watcher *fsnotify.Watcher
+
 	restart := make(chan bool)
 	for {
-		// Watcher to detect changes in the directory
-		watcher, err := fsnotify.NewWatcher()
-		if err != nil {
-			logError(err)
-		}
-		defer func(watcher *fsnotify.Watcher) {
+		// If watcher has been initialized, try to close it
+		if watcher != nil {
 			err := watcher.Close()
 			if err != nil {
 				logError(err)
+				continue
 			}
-		}(watcher)
-
-		err = watcher.Add(dir)
-		if err != nil {
-			logError(err)
-			_ = watcher.Close()
-			return
 		}
-		go func() {
-			fmt.Println("Watcher Starting...")
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Println("Recovered from panic in watcher Goroutine:", r)
-					fmt.Println("Watcher Restarting...")
-					restart <- true
-				} else {
-					restart <- false
-				}
+		for {
+			// Watcher to detect changes in the directory
+			watcher, err := fsnotify.NewWatcher()
+			if err != nil {
+				logError(err)
+			}
+
+			err = watcher.Add(dir)
+			if err != nil {
+				logError(err)
 				_ = watcher.Close()
-			}()
-			for {
-				select {
-				// Heartbeat to check the watcher is still running
-				case <-time.After(5 * time.Minute):
-					fmt.Println("Heartbeat: watcher is still running", time.Now().Format("15:04:05"))
-				case event, ok := <-watcher.Events:
-					if !ok {
-						logError(err)
+				return
+			}
+			go func() {
+				fmt.Println("Watcher Starting...")
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Println("Recovered from panic in watcher Goroutine:", r)
 						fmt.Println("Watcher Restarting...")
 						restart <- true
+					} else {
+						restart <- false
 					}
-					fmt.Println(event)
-					// If an event is detected, run the dbfImport function
-					if event.Has(fsnotify.Write) {
-						for _, i := range dbfImports {
-							dbfFilename := filepath.Base(i.filename)
-							csvFilename := strings.TrimSuffix(dbfFilename, ".DBF")
-							if filepath.Base(event.Name) == dbfFilename {
-								log.Println("modified file:", dbfFilename)
+					_ = watcher.Close()
+				}()
+				for {
+					select {
+					// Heartbeat to check the watcher is still running
+					case <-time.After(5 * time.Minute):
+						fmt.Println("Heartbeat: watcher is still running", time.Now().Format("15:04:05"))
+					case event, ok := <-watcher.Events:
+						if !ok {
+							logError(err)
+							fmt.Println("Watcher Restarting...")
+							restart <- true
+						}
+						fmt.Println(event)
+						// If an event is detected, run the dbfImport function
+						if event.Has(fsnotify.Write) {
+							for _, i := range dbfImports {
+								dbfFilename := filepath.Base(i.filename)
+								csvFilename := strings.TrimSuffix(dbfFilename, ".DBF")
+								if filepath.Base(event.Name) == dbfFilename {
+									log.Println("modified file:", dbfFilename)
 
-								fmt.Printf("%s Updating...\n", dbfFilename)
-								err := dbfImport(dir, dbfFilename, csvFilename, i.mp)
-								if err != nil {
-									logError(err)
+									fmt.Printf("%s Updating...\n", dbfFilename)
+									err := dbfImport(dir, dbfFilename, csvFilename, i.mp)
+									if err != nil {
+										logError(err)
+									}
+									// After the conversion to CSV is done run the sql to import it to Postgresql
+									sqlUpdate()
+									fmt.Printf("%s Finished!\n", dbfFilename)
+									break
 								}
-								// After the conversion to CSV is done run the sql to import it to Postgresql
-								sqlUpdate()
-								fmt.Printf("%s Finished!\n", dbfFilename)
-								break
 							}
 						}
-					}
-				case err, ok := <-watcher.Errors:
-					if !ok {
-						logError(err)
-						log.Println("error:", err)
-						return
+					case err, ok := <-watcher.Errors:
+						if !ok {
+							logError(err)
+							log.Println("error:", err)
+							return
+						}
 					}
 				}
-			}
 
-		}()
-		if <-restart {
-			continue
-		} else {
-			break
+			}()
+			if <-restart {
+				continue
+			} else {
+				break
+			}
 		}
 	}
 }
