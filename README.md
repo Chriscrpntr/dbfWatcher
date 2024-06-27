@@ -1,0 +1,1 @@
+dbfWatcher watches FoxPro dbf files, on a change convert the dbf file to csv, read from an SQL file that drops the table and COPY FROM the csv to keep the PostgreSQL databse up-to-date. Effectively creating a data pipeline from FoxPro dbf files to PostgreSQL. 
