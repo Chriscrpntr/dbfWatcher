@@ -132,13 +132,11 @@ func dbfImport(dir string, dbfFile string, filename string, indices map[int]stri
 	// Print filename in terminal
 	fmt.Println(filename)
 	// Write header row with field names
-	header := make([]string, len(df.FieldNames()))
-
+	header := make([]string, 0)
 	for i, field := range df.FieldNames() {
 		if _, ok := indices[i]; ok {
-			header[i] = field
-		} else {
-			header[i] = ""
+			// Add to header only if i is present in indices
+			header = append(header, field)
 		}
 	}
 
