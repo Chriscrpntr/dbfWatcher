@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -243,12 +242,10 @@ func watch(dir string) {
 						if event.Has(fsnotify.Write) {
 							for _, i := range dbfImports {
 								dbfFilename := filepath.Base(i.filename)
-								csvFilename := strings.TrimSuffix(dbfFilename, ".DBF")
 								if filepath.Base(event.Name) == dbfFilename {
 									log.Println("modified file:", dbfFilename)
-
 									fmt.Printf("%s Updating...\n", dbfFilename)
-									err := dbfImport(dir, dbfFilename, csvFilename, i.mp)
+									err := dbfImport(dir, dbfFilename, i.csvName, i.mp)
 									if err != nil {
 										logError(err)
 									}
