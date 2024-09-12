@@ -145,6 +145,9 @@ func dbfImport(dir string, dbfFile string, filename string, indices map[int]stri
 
 	// Write data rows
 	for i := 0; i < df.NumberOfRecords(); i++ {
+		if df.RowIsDeleted(i) {
+			continue
+		}
 		record := df.GetRowAsSlice(i)
 		data := make([]string, 0, len(record))
 		for i, field := range record {
